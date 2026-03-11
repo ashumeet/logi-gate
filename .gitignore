@@ -1,0 +1,16 @@
+# Binaries
+logi-gate
+/usr/local/bin/logi-gate
+/usr/local/bin/logigate-engine
+
+# Logs
+/tmp/logigate.log
+/tmp/logigate.err
+
+# OS junk
+.DS_Store
+**/.DS_Store
+
+# Go
+vendor/
+go.sum
