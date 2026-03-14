@@ -13,3 +13,7 @@ logi-gate
 
 # Go
 vendor/
+
+# Project Rules
+GEMINI.md
+_CodeSignature/

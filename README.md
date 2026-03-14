@@ -1,67 +1,61 @@
 # LogiGate
 
-**Universal Logitech Hardware Synchronizer for macOS**
+**Professional Logitech Hardware Synchronizer for macOS**
 
-LogiGate is a professional, high-performance utility designed to synchronize multiple Logitech "Easy-Switch" devices (such as the MX Master 3S and ERGO K860) with a single command or hotkey. It provides a native, low-latency alternative to Logitech Flow that works across air-gapped machines, VPNs, and corporate firewalls.
+LogiGate is a surgical, high-performance CLI utility designed to synchronize multiple Logitech "Easy-Switch" devices (such as the MX Master 3S and ERGO K860) with sub-millisecond latency. It provides a native alternative to Logitech Flow that works across air-gapped machines, VPNs, and corporate firewalls.
 
 ## Core Features
 
-- **Dynamic Discovery:** Automatically identifies all connected Logitech HID++ 2.0/3.0 devices and their internal feature indices.
-- **Zero-Dependency Delivery:** All logic and hardware engines are bundled into a single, unified Go binary.
-- **Native Hotkey Daemon:** Hook directly into the macOS event loop for instant, background synchronization.
-- **Surgical Execution:** Communicates directly with device firmware for sub-millisecond switching performance.
+- **Precision Protocol:** Uses empirically validated HID++ 2.0 payloads for guaranteed physical switching.
+- **Surgical Path Targeting:** Bypasses macOS exclusive driver locks by targeting specific hardware nodes (`DevSrvsID`).
+- **Zero-Password Execution:** Optimized for background automation via a targeted `sudoers` whitelist.
+- **Single Binary Utility:** All logic and hardware engines are bundled into a unified Go binary.
 
 ---
 
 ## 🚀 Installation
 
-Follow these steps to build and install LogiGate manually on your Mac.
+Follow these steps to deploy LogiGate as a system-wide CLI utility.
 
-### 1. Build from Source
-Ensure you have [Go](https://go.dev/) installed, then run:
+### 1. Build and Install
+Ensure you have [Go](https://go.dev/) installed, then use the provided Makefile to handle compilation, ad-hoc signing, and system placement:
+
 ```bash
-# Build the unified binary
-go build -o logi-gate cmd/logi-gate/*.go
-
-# Move to your system path
-sudo cp logi-gate /usr/local/bin/
-sudo chmod +x /usr/local/bin/logi-gate
+# Build, sign, and install to /usr/local/bin
+make
 ```
 
-### 2. Configure Hardware Permissions
-LogiGate requires root access to communicate with HID hardware. To enable instant switching without password prompts, add a whitelist rule to your system:
-```bash
-# Grant password-free access to the utility
-echo "$(whoami) ALL=(ALL) NOPASSWD: /usr/local/bin/logi-gate" | sudo tee /etc/sudoers.d/logigate
-sudo chmod 0440 /etc/sudoers.d/logigate
-```
+### 2. Configure Permissions
+LogiGate requires **Accessibility** permission to interact with the OS and **Root Access** (handled via `sudoers`) to write to HID hardware.
+
+1.  Open **System Settings > Privacy & Security > Accessibility**.
+2.  Add `/usr/local/bin/logi-gate` manually and ensure it is toggled **ON**.
 
 ---
 
 ## ⌨️ Usage
 
-### Global Hotkeys
-The LogiGate daemon listens for the following native shortcuts (Control + Option + Command):
-
-- **Switch all to Mac 1:** `Ctrl + Opt + Cmd + J`
-- **Switch all to Mac 2:** `Ctrl + Opt + Cmd + K`
-- **Switch all to Mac 3:** `Ctrl + Opt + Cmd + L`
-
-**First-Time Setup:** Run `logi-gate daemon` in your terminal. On the first hotkey press, macOS will prompt you for **Accessibility Permissions**. Grant the permission in *System Settings* to enable the listener.
-
 ### CLI Commands
-- `logi-gate scan`: Lists all discovered, sync-ready Logitech devices.
-- `logi-gate switch [1-3]`: Manually force all devices to a specific channel.
-- `logi-gate daemon`: Starts the background hotkey listener.
+The utility is designed for direct terminal use or integration into automation scripts.
+
+- `logi-gate scan`: Lists all discovered, sync-ready Logitech devices and their unique hardware paths.
+- `logi-gate [1|2|3]`: Instantaneously force all compatible devices to Channel 1, 2, or 3.
+
+### Automation Trigger
+To trigger LogiGate without a terminal, create a **Quick Action (Service)** in Automator that runs a shell script:
+```bash
+# Example Automator script for a hotkey
+/usr/local/bin/logi-gate 1
+```
 
 ---
 
 ## 📖 How it Works
 
-LogiGate utilizes an embedded `hidapitester` engine to speak the **Logitech HID++ Protocol**. Unlike official software that relies on network discovery, LogiGate probes the local HID stack for Vendor ID `0x046D` and identifies the **Easy-Switch** feature (`0x1E00`) on each device firmware. 
+LogiGate utilizes an embedded `hidapitester` engine to speak the **Logitech HID++ 2.0 Protocol**. Unlike standard software, LogiGate bypasses the primary mouse/keyboard interfaces (which are locked by macOS) and communicates directly with the **Easy-Switch Control Node** (`usagePage: 0xFF43`) using surgical path targeting.
 
-By mapping a single button on your mouse to a keyboard shortcut in **Logi Options+**, LogiGate catches the intent and sends a surgical "Follow Me" command to all other devices simultaneously.
+By sending a validated `0x11, 0x01, [Idx], 0x1E` payload, it forces the hardware to perform a physical handover to the specified host channel.
 
 ## 🤝 Contributing
 
-LogiGate is open-source. Contributions, feature requests, and hardware protocol mappings are welcome!
+LogiGate is open-source. Hardware protocol mappings and feature indices are documented in `HARDWARE_PROTOCOL.md`.
