@@ -4,6 +4,8 @@
 
 LogiGate is a surgical, high-performance CLI utility designed to synchronize multiple Logitech "Easy-Switch" devices (such as the MX Master 3S and ERGO K860) with sub-millisecond latency. It provides a native alternative to Logitech Flow that works across air-gapped machines, VPNs, and corporate firewalls.
 
+**Note:** Currently tested on macOS only. The core hardware protocol should be portable to other operating systems with minimal modifications.
+
 ## Core Features
 
 - **Precision Protocol:** Uses empirically validated HID++ 2.0 payloads for guaranteed physical switching.
@@ -15,21 +17,17 @@ LogiGate is a surgical, high-performance CLI utility designed to synchronize mul
 
 ## 🚀 Installation
 
-Follow these steps to deploy LogiGate as a system-wide CLI utility.
-
-### 1. Build and Install
-Ensure you have [Go](https://go.dev/) installed, then use the provided Makefile to handle compilation, ad-hoc signing, and system placement:
+Clone the project and build it:
 
 ```bash
+# Clone the repository
+git clone https://github.com/ashumeet/logi-gate
+cd logi-gate
+
 # Build, sign, and install to /usr/local/bin
+# Requires Go to be installed
 make
 ```
-
-### 2. Configure Permissions
-LogiGate requires **Accessibility** permission to interact with the OS and **Root Access** (handled via `sudoers`) to write to HID hardware.
-
-1.  Open **System Settings > Privacy & Security > Accessibility**.
-2.  Add `/usr/local/bin/logi-gate` manually and ensure it is toggled **ON**.
 
 ---
 
@@ -47,6 +45,32 @@ To trigger LogiGate without a terminal, create a **Quick Action (Service)** in A
 # Example Automator script for a hotkey
 /usr/local/bin/logi-gate 1
 ```
+
+### LogiOptions+ Button Integration
+For seamless hardware button triggering:
+
+1. **Create Automator Service:**
+   - Open Automator → New Document → Quick Action
+   - Set "Workflow receives" to "no input" in "all applications"
+   - Add "Run Shell Script" action with: `/usr/local/bin/logi-gate 1`
+   - Save as "Logi Gate" (or similar name)
+
+2. **Assign Keyboard Shortcut:**
+   - System Settings → Keyboard → Shortcuts → Services
+   - Find your "Logi Gate" service
+   - Assign a unique shortcut (e.g., Ctrl+Alt+Cmd+L)
+
+3. **Program LogiOptions+ Button:**
+   - Open LogiOptions+
+   - Select your device (MX Master 3S, etc.)
+   - Find the desired button (e.g., "Calculator" button next to 1,2,3)
+   - Assign it to trigger your keyboard shortcut
+
+4. **Repeat on All Machines:**
+   - Set up the same configuration on each computer
+   - Now pressing the hardware button instantly switches all devices to that machine
+
+**Note:** The first time you run the service, macOS will prompt for **Input Monitoring** permission. Click "Allow" when prompted. If you accidentally dismiss the dialog, manually add `/usr/local/bin/logi-gate` in **System Settings > Privacy & Security > Input Monitoring**.
 
 ---
 
