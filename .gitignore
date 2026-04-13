@@ -1,7 +1,8 @@
-# Binaries
-logi-gate
-/usr/local/bin/logi-gate
-/usr/local/bin/logigate-engine
+# Built binaries (root only — don't match source dirs like cmd/logi-gated/)
+/logi-gate
+/logi-gated
+/logi-gate-bar
+/logigate-engine
 
 # Logs
 /tmp/logigate.log
