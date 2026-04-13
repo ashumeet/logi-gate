@@ -19,5 +19,6 @@ func main() {
 	go srv.Serve()
 
 	StartDisplayWatcher()
+	StartPermissionWatcher()
 	StartEventTap(cfg)
 }
