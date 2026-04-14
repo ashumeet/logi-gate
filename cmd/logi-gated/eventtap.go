@@ -60,6 +60,7 @@ type Tap struct {
 	enterAt  time.Time
 	lastFire time.Time
 	spent    bool // true after firing; cleared when cursor leaves the zone
+	timer    *time.Timer
 }
 
 var activeTap *Tap
@@ -109,20 +110,23 @@ func (t *Tap) onMove(gx, gy float64) {
 	now := time.Now()
 
 	t.mu.Lock()
-	if zone != t.inZone {
-		if zone != "" {
-			log.Printf("zone enter: %s (local %.0f,%.0f in %.0fx%.0f)", zone, gx-disp.X, gy-disp.Y, disp.W, disp.H)
-		}
-		t.inZone = zone
-		t.enterAt = now
-		// Leaving any zone (zone=="") clears spent → re-arms the trigger.
-		if zone == "" {
-			t.spent = false
-		}
+	if zone == t.inZone {
 		t.mu.Unlock()
 		return
 	}
+	// Zone transition.
+	if zone != "" {
+		log.Printf("zone enter: %s (local %.0f,%.0f in %.0fx%.0f)", zone, gx-disp.X, gy-disp.Y, disp.W, disp.H)
+	}
+	t.inZone = zone
+	t.enterAt = now
+	if t.timer != nil {
+		t.timer.Stop()
+		t.timer = nil
+	}
 	if zone == "" {
+		// Left all zones → re-arm.
+		t.spent = false
 		t.mu.Unlock()
 		return
 	}
@@ -130,24 +134,36 @@ func (t *Tap) onMove(gx, gy float64) {
 		t.mu.Unlock()
 		return
 	}
-	if now.Sub(t.enterAt) < time.Duration(dwellMs)*time.Millisecond {
-		t.mu.Unlock()
-		return
-	}
-	if now.Sub(t.lastFire) < time.Duration(cooldownMs)*time.Millisecond {
-		t.mu.Unlock()
-		return
-	}
 	if channel < 1 || channel > 3 {
 		t.mu.Unlock()
 		return
 	}
-	t.lastFire = now
-	t.spent = true
+	enteredZone := zone
+	enteredChannel := channel
+	fire := func() {
+		t.mu.Lock()
+		if t.inZone != enteredZone || t.spent {
+			t.mu.Unlock()
+			return
+		}
+		if time.Since(t.lastFire) < time.Duration(cooldownMs)*time.Millisecond {
+			t.mu.Unlock()
+			return
+		}
+		t.lastFire = time.Now()
+		t.spent = true
+		t.timer = nil
+		t.mu.Unlock()
+		log.Printf("trigger %s -> channel %d", enteredZone, enteredChannel)
+		go Switch(enteredChannel)
+	}
+	if dwellMs <= 0 {
+		t.mu.Unlock()
+		fire()
+		return
+	}
+	t.timer = time.AfterFunc(time.Duration(dwellMs)*time.Millisecond, fire)
 	t.mu.Unlock()
-
-	log.Printf("trigger %s -> channel %d", zone, channel)
-	go Switch(channel)
 }
 
 func detectZone(x, y, w, h float64) string {
