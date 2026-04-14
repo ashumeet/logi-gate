@@ -88,14 +88,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateIcon() {
         guard let btn = statusItem.button else { return }
         let on = status.active
-        let color: NSColor = on ? .systemBlue : .systemGray
-        let base = NSImage(systemSymbolName: "display",
+        let disabled = !status.qualified
+        let color: NSColor
+        if disabled {
+            color = NSColor.tertiaryLabelColor
+        } else if on {
+            color = .systemBlue
+        } else {
+            color = .systemGray
+        }
+        let symbolName = disabled ? "display.slash" : "display"
+        let base = NSImage(systemSymbolName: symbolName,
                            accessibilityDescription: "LogiGate")
+            ?? NSImage(systemSymbolName: "display", accessibilityDescription: "LogiGate")
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         let tinted = base?.withSymbolConfiguration(config)
         tinted?.isTemplate = false
         btn.image = tinted
+        btn.alphaValue = disabled ? 0.45 : 1.0
         let tip: String
         if !status.qualified {
             tip = "LogiGate — off (needs exactly 1 external display)"
