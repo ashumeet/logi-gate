@@ -1,5 +1,19 @@
 import AppKit
+import CoreGraphics
 import Foundation
+
+func countExternalDisplays() -> Int {
+    var count: UInt32 = 0
+    CGGetActiveDisplayList(0, nil, &count)
+    if count == 0 { return 0 }
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+    CGGetActiveDisplayList(count, &ids, &count)
+    var ext = 0
+    for id in ids.prefix(Int(count)) where CGDisplayIsBuiltin(id) == 0 {
+        ext += 1
+    }
+    return ext
+}
 
 let SOCKET_PATH = "/var/run/logigate.sock"
 let TRIGGERS = ["bottom_left", "bottom_right", "left_edge", "right_edge"]
@@ -78,10 +92,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         refresh()
         Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in self.refresh() }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.refresh() }
     }
 
     func refresh() {
         status = fetchStatus()
+        // Trust local CoreGraphics for qualified — daemon state can lag.
+        status.qualified = (countExternalDisplays() == 1)
         updateIcon()
     }
 

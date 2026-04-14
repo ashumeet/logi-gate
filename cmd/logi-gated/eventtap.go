@@ -59,6 +59,7 @@ type Tap struct {
 	inZone   string
 	enterAt  time.Time
 	lastFire time.Time
+	spent    bool // true after firing; cleared when cursor leaves the zone
 }
 
 var activeTap *Tap
@@ -114,10 +115,18 @@ func (t *Tap) onMove(gx, gy float64) {
 		}
 		t.inZone = zone
 		t.enterAt = now
+		// Leaving any zone (zone=="") clears spent → re-arms the trigger.
+		if zone == "" {
+			t.spent = false
+		}
 		t.mu.Unlock()
 		return
 	}
 	if zone == "" {
+		t.mu.Unlock()
+		return
+	}
+	if t.spent {
 		t.mu.Unlock()
 		return
 	}
@@ -134,6 +143,7 @@ func (t *Tap) onMove(gx, gy float64) {
 		return
 	}
 	t.lastFire = now
+	t.spent = true
 	t.mu.Unlock()
 
 	log.Printf("trigger %s -> channel %d", zone, channel)

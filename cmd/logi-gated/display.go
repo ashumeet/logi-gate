@@ -110,12 +110,4 @@ func StartDisplayWatcher() {
 	recomputeDisplay()
 	C.startDisplayWatcher()
 	_ = unsafe.Pointer(nil)
-	// Safety-net poll — callback can miss events depending on runloop state.
-	go func() {
-		t := time.NewTicker(1 * time.Second)
-		defer t.Stop()
-		for range t.C {
-			recomputeDisplay()
-		}
-	}()
 }
