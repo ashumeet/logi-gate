@@ -15,7 +15,9 @@ func countExternalDisplays() -> Int {
     return ext
 }
 
-let SOCKET_PATH = "/var/run/logigate.sock"
+let SOCKET_PATH: String = {
+    return "/tmp/logigate-\(getuid()).sock"
+}()
 let TRIGGERS = ["bottom_left", "bottom_right", "left_edge", "right_edge"]
 let TRIGGER_LABELS: [String: String] = [
     "bottom_left": "Bottom-Left Corner",

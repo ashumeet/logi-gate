@@ -13,9 +13,9 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/logi-gated.log</string>
+    <string>/tmp/logi-gated.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/logi-gated.log</string>
+    <string>/tmp/logi-gated.log</string>
     <key>ProcessType</key>
     <string>Interactive</string>
 </dict>

@@ -7,7 +7,13 @@ import (
 	"sync"
 )
 
-const ConfigPath = "/Library/Application Support/LogiGate/config.json"
+var ConfigPath = func() string {
+	h, err := os.UserHomeDir()
+	if err != nil || h == "" {
+		return "/tmp/logigate-config.json"
+	}
+	return filepath.Join(h, "Library", "Application Support", "LogiGate", "config.json")
+}()
 
 type Config struct {
 	Enabled    bool   `json:"enabled"`

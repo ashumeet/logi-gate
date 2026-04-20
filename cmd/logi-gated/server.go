@@ -8,11 +8,17 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
 )
 
-const SocketPath = "/var/run/logigate.sock"
+var SocketPath = func() string {
+	if u, err := user.Current(); err == nil && u.Uid != "" {
+		return "/tmp/logigate-" + u.Uid + ".sock"
+	}
+	return "/tmp/logigate.sock"
+}()
 
 type Server struct {
 	cfg *Config

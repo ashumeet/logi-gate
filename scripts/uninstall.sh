@@ -1,7 +1,8 @@
 #!/bin/bash
 # LogiGate — full uninstall.
 # Removes daemon, menubar, switcher CLI, engine, plists, sudoers rule, config, logs.
-# Requires sudo.
+# Covers BOTH the current user-LaunchAgent install and the legacy system-LaunchDaemon install.
+# Requires sudo (for /usr/local/bin binaries, sudoers rule, and legacy cleanup).
 
 set -u
 
@@ -15,18 +16,26 @@ case "$confirm" in
 esac
 
 echo ""
-echo "→ Stopping daemons..."
-launchctl unload -w "$HOME/Library/LaunchAgents/com.logigate.bar.plist" 2>/dev/null || true
-sudo launchctl unload -w /Library/LaunchDaemons/com.logigate.daemon.plist 2>/dev/null || true
+echo "→ Stopping user LaunchAgents (daemon + bar)..."
+launchctl bootout "gui/$UID/com.logigate.daemon" 2>/dev/null || \
+    launchctl unload -w "$HOME/Library/LaunchAgents/com.logigate.daemon.plist" 2>/dev/null || true
+launchctl bootout "gui/$UID/com.logigate.bar" 2>/dev/null || \
+    launchctl unload -w "$HOME/Library/LaunchAgents/com.logigate.bar.plist" 2>/dev/null || true
+
+echo "→ Stopping legacy system LaunchDaemon (if present)..."
+sudo launchctl bootout system/com.logigate.daemon 2>/dev/null || \
+    sudo launchctl unload -w /Library/LaunchDaemons/com.logigate.daemon.plist 2>/dev/null || true
 
 echo "→ Killing any stragglers..."
+pkill -9 logi-gated 2>/dev/null || true
 sudo pkill -9 logi-gated 2>/dev/null || true
 pkill -9 logi-gate-bar 2>/dev/null || true
 sudo pkill -9 logigate-engine 2>/dev/null || true
 
-echo "→ Removing launchd plists..."
-sudo rm -f /Library/LaunchDaemons/com.logigate.daemon.plist
+echo "→ Removing launchd plists (user + legacy system)..."
+rm -f "$HOME/Library/LaunchAgents/com.logigate.daemon.plist"
 rm -f "$HOME/Library/LaunchAgents/com.logigate.bar.plist"
+sudo rm -f /Library/LaunchDaemons/com.logigate.daemon.plist
 
 echo "→ Removing binaries..."
 sudo rm -f /usr/local/bin/logi-gated
@@ -37,10 +46,15 @@ sudo rm -f /usr/local/bin/logigate-engine
 echo "→ Removing sudoers rule..."
 sudo rm -f /etc/sudoers.d/logigate
 
-echo "→ Removing config + socket + log..."
+echo "→ Removing config + socket + logs (user + legacy)..."
+rm -rf "$HOME/Library/Application Support/LogiGate"
 sudo rm -rf "/Library/Application Support/LogiGate"
+rm -f "/tmp/logigate-$UID.sock"
+rm -f /tmp/logigate.sock
 sudo rm -f /var/run/logigate.sock
+rm -f /tmp/logi-gated.log
 sudo rm -f /var/log/logi-gated.log
+rm -f /tmp/logi-gate-bar.log
 
 echo "→ Removing legacy/leftover artifacts..."
 sudo rm -f /usr/local/bin/logigate-trigger.sh
