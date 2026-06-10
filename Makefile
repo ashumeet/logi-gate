@@ -10,29 +10,60 @@ ENGINE_PATH=/usr/local/bin/logigate-engine
 DAEMON_BIN=/usr/local/bin/logi-gated
 BAR_BIN=/usr/local/bin/logi-gate-bar
 
+# Stable code-signing identity. Auto-detected from the local keychain so this
+# works on any machine; override explicitly with:  make SIGN_ID="Your Identity"
+# (name or SHA-1 from: security find-identity -v -p codesigning)
+#
+# REQUIRED: ad-hoc signing (codesign -s -) gives TCC only a cdhash-based
+# Designated Requirement with no certificate anchor, so tccd cannot re-attribute
+# the binary after a reboot and DROPS the Accessibility + Input Monitoring grants
+# every boot. A cert-anchored identity yields a DR that survives reboot AND
+# rebuild, so the grant persists permanently after a single re-approval.
+SIGN_ID ?= $(shell security find-identity -v -p codesigning 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -1)
+
 DAEMON_PLIST=$(HOME)/Library/LaunchAgents/com.logigate.daemon.plist
 BAR_PLIST=$(HOME)/Library/LaunchAgents/com.logigate.bar.plist
 
 LEGACY_DAEMON_PLIST=/Library/LaunchDaemons/com.logigate.daemon.plist
 
-.PHONY: all build install reinstall nuke clean reload \
+.PHONY: all build install reinstall nuke clean reload check-signid \
         migrate-legacy load-daemon unload-daemon load-bar unload-bar
 
 all: install
 
-build:
+# Fail loudly if the stable signing identity is missing. Falling back to ad-hoc
+# silently would reintroduce the every-reboot permission reset. If this fails,
+# the Apple Development cert likely expired — renew it in Xcode (Settings →
+# Accounts → Manage Certificates → +), then re-run make.
+check-signid:
+	@if [ -z "$(SIGN_ID)" ] || ! security find-identity -v -p codesigning | grep -q "$(SIGN_ID)"; then \
+		echo ""; \
+		echo "✗ No usable code-signing identity found (SIGN_ID='$(SIGN_ID)')."; \
+		echo "  Stable signing is REQUIRED — without it macOS resets the"; \
+		echo "  Accessibility + Input Monitoring permissions on every reboot."; \
+		echo "  Fix one of:"; \
+		echo "    • Have an Apple Development/Developer ID cert in your keychain, OR"; \
+		echo "    • Create a self-signed code-signing cert (Keychain Access →"; \
+		echo "      Certificate Assistant → Create a Certificate → Code Signing), OR"; \
+		echo "    • Pass one explicitly:  make SIGN_ID=\"Your Identity\""; \
+		echo "  List identities: security find-identity -v -p codesigning"; \
+		echo ""; \
+		exit 1; \
+	fi
+
+build: check-signid
 	@echo "→ Building switcher CLI..."
 	go build -o logi-gate ./cmd/logi-gate
 	@echo "→ Building daemon (Cgo CGEventTap)..."
 	CGO_ENABLED=1 go build -o logi-gated ./cmd/logi-gated
 	@echo "→ Building menubar app (Swift)..."
 	swiftc -O -o logi-gate-bar menubar/LogiGateBar/main.swift -framework AppKit
-	@echo "→ Signing..."
-	codesign -s - --force logi-gate
-	codesign -s - --force logi-gated
-	codesign -s - --force logi-gate-bar
+	@echo "→ Signing with stable identity (cert-anchored DR survives reboot)..."
+	codesign --force -s $(SIGN_ID) -i com.logigate.cli    logi-gate
+	codesign --force -s $(SIGN_ID) -i com.logigate.daemon logi-gated
+	codesign --force -s $(SIGN_ID) -i com.logigate.bar    logi-gate-bar
 	cp cmd/logi-gate/bin/hidapitester ./logigate-engine
-	codesign -s - --force ./logigate-engine
+	codesign --force -s $(SIGN_ID) -i com.logigate.engine ./logigate-engine
 
 # Migrate off the old system LaunchDaemon (pre-4.x install) if present.
 # The daemon used to run as root under /Library/LaunchDaemons; that context
@@ -69,15 +100,17 @@ install: build migrate-legacy
 	@echo ""
 	@echo "✓ Installed."
 	@echo ""
-	@echo "ONE-TIME SETUP (required after first install OR after any migration):"
+	@echo "ONE-TIME SETUP (required once after switching to stable signing):"
 	@echo "  System Settings → Privacy & Security"
-	@echo "    Input Monitoring → add /usr/local/bin/logi-gated → ON"
-	@echo "    Accessibility    → add /usr/local/bin/logi-gated → ON"
-	@echo "  (If 'logi-gated' is already in those lists from an older install,"
-	@echo "   remove the existing entry first, then re-add — the launch context"
-	@echo "   changed from root daemon to user agent.)"
+	@echo "    Accessibility    → REMOVE any old logi-gated entry (−), then add"
+	@echo "                       /usr/local/bin/logi-gated (+) → ON"
+	@echo "    Input Monitoring → REMOVE any old logi-gated entry (−), then add"
+	@echo "                       /usr/local/bin/logi-gated (+) → ON"
+	@echo "  The OLD entry was keyed to the ad-hoc cdhash and will never match the"
+	@echo "  newly-signed binary, so it MUST be removed once. After this single"
+	@echo "  re-grant the permission persists across every reboot — permanently."
 	@echo ""
-	@echo "Then: make reload"
+	@echo "Then: make reload   (or just reboot to confirm it sticks)"
 
 # Idempotent re-install: safe to run any time. Handles migration off the
 # legacy root system daemon and replaces the running user agent in place.
