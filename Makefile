@@ -11,7 +11,8 @@ DAEMON_BIN=/usr/local/bin/logi-gated
 BAR_BIN=/usr/local/bin/logi-gate-bar
 
 # Stable code-signing identity. Auto-detected from the local keychain so this
-# works on any machine; override explicitly with:  make SIGN_ID="Your Identity"
+# works on any machine; if none exists, `make` mints a self-signed one (see the
+# signing-cert target). Override explicitly with:  make SIGN_ID="Your Identity"
 # (name or SHA-1 from: security find-identity -v -p codesigning)
 #
 # REQUIRED: ad-hoc signing (codesign -s -) gives TCC only a cdhash-based
@@ -26,44 +27,44 @@ BAR_PLIST=$(HOME)/Library/LaunchAgents/com.logigate.bar.plist
 
 LEGACY_DAEMON_PLIST=/Library/LaunchDaemons/com.logigate.daemon.plist
 
-.PHONY: all build install reinstall nuke clean reload check-signid \
+.PHONY: all build install reinstall nuke clean reload signing-cert \
         migrate-legacy load-daemon unload-daemon load-bar unload-bar
 
 all: install
 
-# Fail loudly if the stable signing identity is missing. Falling back to ad-hoc
-# silently would reintroduce the every-reboot permission reset. If this fails,
-# the Apple Development cert likely expired — renew it in Xcode (Settings →
-# Accounts → Manage Certificates → +), then re-run make.
-check-signid:
-	@if [ -z "$(SIGN_ID)" ] || ! security find-identity -v -p codesigning | grep -q "$(SIGN_ID)"; then \
-		echo ""; \
-		echo "✗ No usable code-signing identity found (SIGN_ID='$(SIGN_ID)')."; \
-		echo "  Stable signing is REQUIRED — without it macOS resets the"; \
-		echo "  Accessibility + Input Monitoring permissions on every reboot."; \
-		echo "  Fix one of:"; \
-		echo "    • Have an Apple Development/Developer ID cert in your keychain, OR"; \
-		echo "    • Create a self-signed code-signing cert (Keychain Access →"; \
-		echo "      Certificate Assistant → Create a Certificate → Code Signing), OR"; \
-		echo "    • Pass one explicitly:  make SIGN_ID=\"Your Identity\""; \
-		echo "  List identities: security find-identity -v -p codesigning"; \
-		echo ""; \
-		exit 1; \
+# Ensure a stable code-signing identity exists before building. Falling back to
+# ad-hoc silently would reintroduce the every-reboot permission reset. Uses an
+# existing Apple Development / Developer ID cert if present; otherwise mints a
+# stable self-signed one (100-year, never expires). First mint is interactive
+# (login password once) — see scripts/make-signing-cert.sh.
+signing-cert:
+	@if [ -n "$(SIGN_ID)" ]; then \
+		echo "→ Using code-signing identity: $(SIGN_ID)"; \
+	else \
+		echo "→ No code-signing identity found — creating a self-signed one..."; \
+		./scripts/make-signing-cert.sh "LogiGate Local Signing"; \
 	fi
 
-build: check-signid
+build: signing-cert
 	@echo "→ Building switcher CLI..."
 	go build -o logi-gate ./cmd/logi-gate
 	@echo "→ Building daemon (Cgo CGEventTap)..."
 	CGO_ENABLED=1 go build -o logi-gated ./cmd/logi-gated
 	@echo "→ Building menubar app (Swift)..."
 	swiftc -O -o logi-gate-bar menubar/LogiGateBar/main.swift -framework AppKit
-	@echo "→ Signing with stable identity (cert-anchored DR survives reboot)..."
-	codesign --force -s $(SIGN_ID) -i com.logigate.cli    logi-gate
-	codesign --force -s $(SIGN_ID) -i com.logigate.daemon logi-gated
-	codesign --force -s $(SIGN_ID) -i com.logigate.bar    logi-gate-bar
 	cp cmd/logi-gate/bin/hidapitester ./logigate-engine
-	codesign --force -s $(SIGN_ID) -i com.logigate.engine ./logigate-engine
+	@echo "→ Signing with stable identity (cert-anchored DR survives reboot)..."
+	@id="$(SIGN_ID)"; \
+	 [ -n "$$id" ] || id=$$(security find-identity -v -p codesigning 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -1); \
+	 if [ -z "$$id" ]; then \
+	   echo "✗ No code-signing identity available. Run: make signing-cert"; \
+	   exit 1; \
+	 fi; \
+	 echo "  identity: $$id"; \
+	 codesign --force -s "$$id" -i com.logigate.cli    logi-gate; \
+	 codesign --force -s "$$id" -i com.logigate.daemon logi-gated; \
+	 codesign --force -s "$$id" -i com.logigate.bar    logi-gate-bar; \
+	 codesign --force -s "$$id" -i com.logigate.engine ./logigate-engine
 
 # Migrate off the old system LaunchDaemon (pre-4.x install) if present.
 # The daemon used to run as root under /Library/LaunchDaemons; that context
