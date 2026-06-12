@@ -109,5 +109,21 @@ func goDisplayChanged() {
 func StartDisplayWatcher() {
 	recomputeDisplay()
 	C.startDisplayWatcher()
+	// Fallback for a missed reconfiguration callback. The daemon launches at
+	// boot via RunAtLoad, often BEFORE the displays finish enumerating, so the
+	// first recomputeDisplay sees 0 externals and computes Qualified=false. The
+	// CGDisplayRegisterReconfigurationCallback is meant to correct this once the
+	// displays settle, but during boot (and the permission-respawn churn) that
+	// event can fire before registration completes or be lost — leaving the
+	// daemon stuck at Qualified=false until a manual restart, so the corner
+	// trigger never fires. Re-evaluate on a low-frequency ticker; recomputeDisplay
+	// only updates/logs on change, so this is quiet and self-heals the boot race.
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			recomputeDisplay()
+		}
+	}()
 	_ = unsafe.Pointer(nil)
 }

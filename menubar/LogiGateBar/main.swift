@@ -81,17 +81,19 @@ func fetchStatus() -> Status {
     return s
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var status = Status()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let btn = statusItem.button {
-            btn.target = self
-            btn.action = #selector(onClick(_:))
-            btn.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        }
+        // macOS 27: a status-bar button no longer delivers right-click events to
+        // its action (every click arrives as .leftMouseUp), so the old right-click
+        // menu could never open. Use the native statusItem.menu — AppKit opens it
+        // reliably on a normal click. The on/off toggle now lives in the menu.
+        let menu = NSMenu()
+        menu.delegate = self
+        statusItem.menu = menu
         refresh()
         Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in self.refresh() }
         NotificationCenter.default.addObserver(
@@ -140,24 +142,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         btn.toolTip = tip
     }
 
-    @objc func onClick(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else { return }
-        if event.type == .rightMouseUp {
-            showMenu()
-        } else {
-            // Left click: toggle user preference. Auto-gate still applies.
-            _ = sendCommand("TOGGLE")
-            refresh()
-        }
-    }
+    // Rebuilt with fresh state every time the menu is about to open.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        status = fetchStatus()
+        status.qualified = (countExternalDisplays() == 1)
+        menu.removeAllItems()
 
-    func showMenu() {
-        let menu = NSMenu()
+        // Enable/disable toggle — moved here from the old left-click, which can
+        // no longer fire its own event separate from opening the menu.
+        let enabledItem = NSMenuItem(title: status.enabled ? "Enabled" : "Disabled",
+                                     action: #selector(toggleEnabled),
+                                     keyEquivalent: "")
+        enabledItem.target = self
+        enabledItem.state = status.enabled ? .on : .off
+        menu.addItem(enabledItem)
+        menu.addItem(.separator())
 
         let triggerSub = NSMenu()
         for t in TRIGGERS {
-            let label = TRIGGER_LABELS[t] ?? t
-            let item = NSMenuItem(title: label,
+            let item = NSMenuItem(title: TRIGGER_LABELS[t] ?? t,
                                   action: #selector(setActiveTrigger(_:)),
                                   keyEquivalent: "")
             item.target = self
@@ -187,15 +190,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for ch in 1...3 {
             let item = NSMenuItem(title: "Switch to Channel \(ch)",
                                   action: #selector(switchNow(_:)),
-                                  keyEquivalent: "\(ch)")
+                                  keyEquivalent: "")
             item.target = self
             item.representedObject = ch
             menu.addItem(item)
         }
+    }
 
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        statusItem.menu = nil
+    @objc func toggleEnabled() {
+        _ = sendCommand("TOGGLE")
+        refresh()
     }
 
     @objc func setActiveTrigger(_ sender: NSMenuItem) {
