@@ -18,3 +18,6 @@ vendor/
 # Project Rules
 GEMINI.md
 _CodeSignature/
+
+# Local PAI/agent working notes (PRDs, session state)
+MEMORY/

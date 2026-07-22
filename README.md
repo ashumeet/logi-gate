@@ -38,9 +38,13 @@ no Logitech Flow, no shared network required.
   is connected. With zero externals (laptop only) or multiple externals the
   menubar icon greys out and the daemon drops cursor events.
 - **Socket IPC:** daemon exposes a UNIX socket at `/tmp/logigate-$UID.sock`
-  (commands: `STATUS`, `TOGGLE`, `SET trigger|channel`, `SWITCH <n>`, `SCAN`).
+  (commands: `STATUS`, `TOGGLE`,
+  `SET trigger <bucket> <1|2> <zone|off>`, `SET channel <bucket> <1|2> <1|2|3>`,
+  `SWITCH <n>`, `SCAN`, where `bucket` ∈ `none|one|multi`). A setup is armed iff
+  it has a trigger; STATUS reports the derived `armed` per bucket.
 - **Config:** `~/Library/Application Support/LogiGate/config.json` — enabled,
-  dwell_ms, cooldown_ms, trigger, channel.
+  dwell_ms, cooldown_ms, and `setups` (a per-bucket map, each with two
+  `triggers`). Legacy `trigger`/`channel` configs migrate automatically.
 - **Log:** `/tmp/logi-gated.log` (and `/tmp/logi-gate-bar.log`).
 
 ---
@@ -121,18 +125,40 @@ Kickstarts both agents in place (preserves TCC grants).
 
 ### Menubar (primary UX)
 
-Left-click the menubar icon to toggle the trigger on/off. Right-click for:
+LogiGate is organized around **Setups** — display configurations it
+auto-detects by external-monitor count. There are three, and every real
+arrangement lands in exactly one:
 
-- **Trigger** submenu — pick the activation zone (Bottom-Left, Bottom-Right,
-  Left Edge, Right Edge).
-- **Channel** submenu — pick which channel the trigger switches to (1, 2, 3).
-- **Switch to Channel N** — manual one-click switch, ignores trigger state.
+- **Laptop only** (0 external)
+- **1 external display**
+- **2+ external displays**
+
+Each Setup has up to **two triggers** (a corner/edge zone → a target channel).
+A Setup is **armed automatically whenever it has at least one trigger set** —
+there is no separate on/off per setup. So a bare laptop with no triggers stays
+inert, while the same laptop docked with a monitor (a setup you've given a
+trigger) arms itself, with no manual switching. The **Enable** button is the
+single master override on top of that.
+
+Click the menubar icon for the menu (Layout A — the active setup expands inline):
+
+- **Enabled/Disabled** — master toggle (turns everything off regardless of triggers).
+- **Now: N external → …** — the currently-active setup and whether it's armed.
+- **THIS SETUP** — the active setup, expanded: *Trigger 1* and *Trigger 2*
+  submenus (pick a zone and a channel, or Off). Setting any trigger arms it.
+- **Other setups ▸** — the other two setups, each in its own submenu with the
+  same controls, so you can pre-configure them.
+- **Switch now ▸** — manual one-click switch to a channel, ignores triggers.
+
+Since you're always *already* on one of your three hosts, one or two triggers
+per setup is enough to reach the other two. On multi-monitor setups the
+corner/edge is detected on whichever display the cursor is currently in.
 
 Icon states:
 
-- **Blue `display`** — enabled and display-qualified (1 external connected).
-- **Grey `display`** — disabled by user toggle.
-- **Faded `display.slash`** — gated out because display count != 1 external.
+- **Blue `display`** — enabled and the active setup is armed.
+- **Grey `display`** — disabled by the master toggle.
+- **Faded `display.slash`** — the active setup isn't armed.
 
 ### CLI
 
@@ -197,6 +223,8 @@ indices.
 ## Contributing
 
 Hardware protocol mappings and feature indices are documented in
-`HARDWARE_PROTOCOL.md`. Feature-index probes for unknown Logitech devices
-use the `probeFeatureIndex` path in `cmd/logi-gate/manager.go`; hardcoded
-fast-path IDs (B034, B364) live in the same file.
+`HARDWARE_PROTOCOL.md`. Unknown Logitech devices are resolved dynamically by
+`probeFeatureIndex` in `cmd/logi-gate/manager.go`, which retries the HID++
+feature query with backoff (the device pipe is racy, so a single read often
+misses). Hardcoded fast-path IDs (B034, B364, B359) in the same file skip the
+probe for known units — an optimization, not a requirement.

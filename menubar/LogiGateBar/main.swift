@@ -26,12 +26,37 @@ let TRIGGER_LABELS: [String: String] = [
     "right_edge": "Right Edge",
 ]
 
+// One trigger slot: a zone bound to a channel (channel 0 / empty zone = unused).
+struct Trigger {
+    var zone: String = ""
+    var channel: Int = 0
+    var isSet: Bool { !zone.isEmpty && channel >= 1 && channel <= 3 }
+}
+
+// A Setup = one display configuration (bucket) with up to 2 triggers. It is
+// "armed" purely as a function of its triggers — if any slot is set it fires.
+// The master Enable button is the only global override.
+struct Setup {
+    var triggers: [Trigger] = [Trigger(), Trigger()]
+    var armed: Bool { triggers.contains { $0.isSet } }
+}
+
+let BUCKET_LABELS: [String: String] = [
+    "none": "Laptop only (0 external)",
+    "one": "1 external display",
+    "multi": "2+ external displays",
+]
+let BUCKET_ORDER = ["none", "one", "multi"]
+
 struct Status {
     var enabled: Bool = false
-    var qualified: Bool = false
-    var trigger: String = "bottom_left"
-    var channel: Int = 1
-    var active: Bool { enabled && qualified }
+    var externalCount: Int = 0
+    var activeBucket: String = "one"
+    var setups: [String: Setup] = [:]
+
+    var activeSetup: Setup? { setups[activeBucket] }
+    var armedHere: Bool { activeSetup?.armed ?? false }
+    var active: Bool { enabled && armedHere }
 }
 
 func sendCommand(_ cmd: String) -> String? {
@@ -75,9 +100,22 @@ func fetchStatus() -> Status {
           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return s }
     s.enabled = (obj["enabled"] as? Bool) ?? false
-    s.qualified = (obj["qualified"] as? Bool) ?? false
-    if let t = obj["trigger"] as? String { s.trigger = t }
-    if let c = obj["channel"] as? Int { s.channel = c }
+    s.externalCount = (obj["external_count"] as? Int) ?? 0
+    if let ab = obj["active_bucket"] as? String { s.activeBucket = ab }
+    if let setups = obj["setups"] as? [String: Any] {
+        for (bucket, raw) in setups {
+            guard let sd = raw as? [String: Any] else { continue }
+            var setup = Setup()
+            if let trigs = sd["triggers"] as? [[String: Any]] {
+                for (i, td) in trigs.prefix(2).enumerated() {
+                    setup.triggers[i] = Trigger(
+                        zone: (td["zone"] as? String) ?? "",
+                        channel: (td["channel"] as? Int) ?? 0)
+                }
+            }
+            s.setups[bucket] = setup
+        }
+    }
     return s
 }
 
@@ -104,15 +142,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func refresh() {
         status = fetchStatus()
-        // Trust local CoreGraphics for qualified — daemon state can lag.
-        status.qualified = (countExternalDisplays() == 1)
+        // Trust local CoreGraphics for the display count — daemon state can lag.
+        // Re-derive the active bucket locally so the icon reflects reality.
+        status.externalCount = countExternalDisplays()
+        status.activeBucket = bucketFor(status.externalCount)
         updateIcon()
+    }
+
+    // Mirror the daemon's BucketFor: 0 → none, 1 → one, else → multi.
+    func bucketFor(_ count: Int) -> String {
+        return count == 0 ? "none" : (count == 1 ? "one" : "multi")
     }
 
     func updateIcon() {
         guard let btn = statusItem.button else { return }
         let on = status.active
-        let disabled = !status.qualified
+        let disabled = !status.armedHere
         let color: NSColor
         if disabled {
             color = NSColor.tertiaryLabelColor
@@ -132,68 +177,125 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         btn.image = tinted
         btn.alphaValue = disabled ? 0.45 : 1.0
         let tip: String
-        if !status.qualified {
-            tip = "LogiGate — off (needs exactly 1 external display)"
+        let setupName = BUCKET_LABELS[status.activeBucket] ?? status.activeBucket
+        if !status.armedHere {
+            tip = "LogiGate — off (\(setupName) not armed)"
         } else if status.enabled {
-            tip = "LogiGate — on"
+            tip = "LogiGate — on (\(setupName))"
         } else {
             tip = "LogiGate — off"
         }
         btn.toolTip = tip
     }
 
-    // Rebuilt with fresh state every time the menu is about to open.
+    // Rebuilt with fresh state every time the menu is about to open. Layout A:
+    // the active setup is expanded inline; the other setups live in a submenu.
     func menuNeedsUpdate(_ menu: NSMenu) {
         status = fetchStatus()
-        status.qualified = (countExternalDisplays() == 1)
+        status.externalCount = countExternalDisplays()
+        status.activeBucket = bucketFor(status.externalCount)
         menu.removeAllItems()
 
-        // Enable/disable toggle — moved here from the old left-click, which can
-        // no longer fire its own event separate from opening the menu.
+        // Master enable/disable.
         let enabledItem = NSMenuItem(title: status.enabled ? "Enabled" : "Disabled",
                                      action: #selector(toggleEnabled),
                                      keyEquivalent: "")
         enabledItem.target = self
         enabledItem.state = status.enabled ? .on : .off
         menu.addItem(enabledItem)
+
+        // "Now:" status line — which setup is active and whether it's armed.
+        let activeName = BUCKET_LABELS[status.activeBucket] ?? status.activeBucket
+        let nowLine = NSMenuItem(
+            title: "Now: \(status.externalCount) external → \(activeName)\(status.armedHere ? " · armed" : " · off")",
+            action: nil, keyEquivalent: "")
+        nowLine.isEnabled = false
+        menu.addItem(nowLine)
         menu.addItem(.separator())
 
-        let triggerSub = NSMenu()
-        for t in TRIGGERS {
-            let item = NSMenuItem(title: TRIGGER_LABELS[t] ?? t,
-                                  action: #selector(setActiveTrigger(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = t
-            if t == status.trigger { item.state = .on }
-            triggerSub.addItem(item)
-        }
-        let triggerParent = NSMenuItem(title: "Trigger", action: nil, keyEquivalent: "")
-        triggerParent.submenu = triggerSub
-        menu.addItem(triggerParent)
-
-        let channelSub = NSMenu()
-        for ch in 1...3 {
-            let item = NSMenuItem(title: "Channel \(ch)",
-                                  action: #selector(setActiveChannel(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = ch
-            if ch == status.channel { item.state = .on }
-            channelSub.addItem(item)
-        }
-        let channelParent = NSMenuItem(title: "Channel", action: nil, keyEquivalent: "")
-        channelParent.submenu = channelSub
-        menu.addItem(channelParent)
-
+        // THIS SETUP — expanded inline.
+        let header = NSMenuItem(title: "THIS SETUP  (\(activeName))", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        appendSetupBody(to: menu, bucket: status.activeBucket, indent: true)
         menu.addItem(.separator())
+
+        // Other setups — each in its own submenu.
+        let othersParent = NSMenuItem(title: "Other setups", action: nil, keyEquivalent: "")
+        let othersMenu = NSMenu()
+        for bucket in BUCKET_ORDER where bucket != status.activeBucket {
+            let name = BUCKET_LABELS[bucket] ?? bucket
+            let armed = status.setups[bucket]?.armed ?? false
+            let sub = NSMenu()
+            appendSetupBody(to: sub, bucket: bucket, indent: false)
+            let parent = NSMenuItem(title: "\(name) · \(armed ? "armed" : "off")",
+                                    action: nil, keyEquivalent: "")
+            parent.submenu = sub
+            othersMenu.addItem(parent)
+        }
+        othersParent.submenu = othersMenu
+        menu.addItem(othersParent)
+        menu.addItem(.separator())
+
+        // Manual switch — ignores gates/triggers.
+        let switchParent = NSMenuItem(title: "Switch now", action: nil, keyEquivalent: "")
+        let switchMenu = NSMenu()
         for ch in 1...3 {
-            let item = NSMenuItem(title: "Switch to Channel \(ch)",
-                                  action: #selector(switchNow(_:)),
-                                  keyEquivalent: "")
+            let item = NSMenuItem(title: "Channel \(ch)", action: #selector(switchNow(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = ch
-            menu.addItem(item)
+            switchMenu.addItem(item)
+        }
+        switchParent.submenu = switchMenu
+        menu.addItem(switchParent)
+    }
+
+    // Renders one setup: two trigger-slot submenus. The setup is armed
+    // automatically whenever at least one slot is set — no separate toggle.
+    func appendSetupBody(to menu: NSMenu, bucket: String, indent: Bool) {
+        let pad = indent ? "  " : ""
+        let setup = status.setups[bucket] ?? Setup()
+
+        for slot in 1...2 {
+            let trig = setup.triggers[slot - 1]
+            let sub = NSMenu()
+
+            // Zone picker (including Off).
+            let offItem = NSMenuItem(title: "Off", action: #selector(setTriggerZone(_:)), keyEquivalent: "")
+            offItem.target = self
+            offItem.representedObject = ["bucket": bucket, "slot": slot, "zone": "off"]
+            if !trig.isSet { offItem.state = .on }
+            sub.addItem(offItem)
+            sub.addItem(.separator())
+            for z in TRIGGERS {
+                let zi = NSMenuItem(title: TRIGGER_LABELS[z] ?? z, action: #selector(setTriggerZone(_:)), keyEquivalent: "")
+                zi.target = self
+                zi.representedObject = ["bucket": bucket, "slot": slot, "zone": z]
+                if trig.zone == z { zi.state = .on }
+                sub.addItem(zi)
+            }
+            sub.addItem(.separator())
+            // Channel picker.
+            let chHeader = NSMenuItem(title: "Switch to channel:", action: nil, keyEquivalent: "")
+            chHeader.isEnabled = false
+            sub.addItem(chHeader)
+            for ch in 1...3 {
+                let ci = NSMenuItem(title: "Channel \(ch)", action: #selector(setTriggerChannel(_:)), keyEquivalent: "")
+                ci.target = self
+                ci.representedObject = ["bucket": bucket, "slot": slot, "channel": ch]
+                if trig.channel == ch { ci.state = .on }
+                sub.addItem(ci)
+            }
+
+            let desc: String
+            if trig.isSet {
+                desc = "\(TRIGGER_LABELS[trig.zone] ?? trig.zone) → Ch \(trig.channel)"
+            } else {
+                desc = "Off"
+            }
+            let parent = NSMenuItem(title: "\(pad)Trigger \(slot):  \(desc)", action: nil, keyEquivalent: "")
+            parent.submenu = sub
+            menu.addItem(parent)
         }
     }
 
@@ -202,15 +304,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
-    @objc func setActiveTrigger(_ sender: NSMenuItem) {
-        guard let t = sender.representedObject as? String else { return }
-        _ = sendCommand("SET trigger \(t)")
+    @objc func setTriggerZone(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let bucket = info["bucket"] as? String,
+              let slot = info["slot"] as? Int,
+              let zone = info["zone"] as? String else { return }
+        _ = sendCommand("SET trigger \(bucket) \(slot) \(zone)")
         refresh()
     }
 
-    @objc func setActiveChannel(_ sender: NSMenuItem) {
-        guard let ch = sender.representedObject as? Int else { return }
-        _ = sendCommand("SET channel \(ch)")
+    @objc func setTriggerChannel(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let bucket = info["bucket"] as? String,
+              let slot = info["slot"] as? Int,
+              let ch = info["channel"] as? Int else { return }
+        _ = sendCommand("SET channel \(bucket) \(slot) \(ch)")
         refresh()
     }
 

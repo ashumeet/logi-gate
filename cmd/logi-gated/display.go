@@ -41,10 +41,26 @@ import (
 	"unsafe"
 )
 
+// Rect is a display's bounds in global CG coordinates.
+type Rect struct {
+	X, Y, W, H float64
+}
+
 type DisplayState struct {
-	Qualified bool    // exactly one external display is connected
-	X, Y      float64 // external display origin in global CG coords
-	W, H      float64 // external display size
+	ExternalCount int    // number of external (non-builtin) displays
+	Externals     []Rect // bounds of every external display
+}
+
+// ExternalUnderCursor returns the external display rectangle containing the
+// global point, and whether one was found. Corner/edge detection runs against
+// this rect so triggers work on any monitor, not just a single hardcoded one.
+func (s DisplayState) ExternalUnderCursor(gx, gy float64) (Rect, bool) {
+	for _, r := range s.Externals {
+		if gx >= r.X && gy >= r.Y && gx <= r.X+r.W && gy <= r.Y+r.H {
+			return r, true
+		}
+	}
+	return Rect{}, false
 }
 
 var (
@@ -71,25 +87,25 @@ func recomputeDisplay() {
 		}
 	}
 
-	var st DisplayState
-	if len(externals) == 1 {
+	rects := make([]Rect, 0, len(externals))
+	for _, id := range externals {
 		var x, y, w, h C.double
-		C.displayBounds(externals[0], &x, &y, &w, &h)
-		st = DisplayState{
-			Qualified: true,
-			X:         float64(x), Y: float64(y),
-			W: float64(w), H: float64(h),
-		}
+		C.displayBounds(id, &x, &y, &w, &h)
+		rects = append(rects, Rect{X: float64(x), Y: float64(y), W: float64(w), H: float64(h)})
+	}
+
+	st := DisplayState{
+		ExternalCount: len(externals),
+		Externals:     rects,
 	}
 
 	displayMu.Lock()
-	prev := displayState
+	prev := displayState.ExternalCount
 	displayState = st
 	displayMu.Unlock()
 
-	if prev != st {
-		log.Printf("display state: qualified=%v externals=%d bounds=(%.0f,%.0f %.0fx%.0f)",
-			st.Qualified, len(externals), st.X, st.Y, st.W, st.H)
+	if prev != st.ExternalCount {
+		log.Printf("display state: externals=%d bucket=%s", st.ExternalCount, BucketFor(st.ExternalCount))
 	}
 }
 

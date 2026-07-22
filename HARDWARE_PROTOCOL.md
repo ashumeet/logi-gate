@@ -3,8 +3,9 @@
 This document contains the exact, empirically validated HID++ payloads for switching Logitech hardware on this machine.
 
 ## Devices
-- **MX Master 3S M** (PID: B034)
-- **ERGO 860B** (PID: B364)
+- **MX Master 3S M** (PID: B034, FeatureIdx 0x0A)
+- **ERGO K860** (PID: B364, FeatureIdx 0x09)
+- **ERGO K860** (PID: B359, FeatureIdx 0x1A)
 
 ## Protocol: HID++ 2.0 (Long Report)
 The following sequence is required for a successful hardware switch.

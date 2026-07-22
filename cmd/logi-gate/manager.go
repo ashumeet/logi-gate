@@ -65,7 +65,8 @@ func discoverDevices(output string, enginePath string) []ManagedDevice {
 			// Fast path: use hardcoded indices based on device PID
 			idx := ""
 			if currentPID == "B034" { idx = "0x0A" } // MX Master 3S
-			if currentPID == "B364" { idx = "0x09" } // ERGO K860
+			if currentPID == "B364" { idx = "0x09" } // ERGO K860 (older unit)
+			if currentPID == "B359" { idx = "0x1A" } // ERGO K860 (B359 unit)
 			
 			if idx == "" {
 				idx, _ = probeFeatureIndex(currentPath, enginePath)
@@ -85,18 +86,30 @@ func discoverDevices(output string, enginePath string) []ManagedDevice {
 	return devices
 }
 
+// probeFeatureIndex asks the device for its Easy-Switch feature index via the
+// HID++ root-feature query. The device's HID input pipe is racy — a single read
+// frequently returns before the reply lands (empty read), so we retry with
+// backoff. A parsed byte (including a genuine 0x00 "feature absent") is a
+// definitive answer and stops the loop; only unparseable/empty reads retry.
 func probeFeatureIndex(path string, enginePath string) (string, error) {
 	payload := "0x11,0xFF,0x00,0x00,0x1E,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00"
-	cmd := exec.Command("sudo", "-n", enginePath, "--open-path", path, "--length", "20", "--send-output", payload, "--read-input", "20")
-	out, _ := cmd.CombinedOutput()
-	outputStr := string(out)
-	if idx := strings.Index(outputStr, "read 20 bytes:"); idx != -1 {
-		hexPart := outputStr[idx+len("read 20 bytes:"):]
-		parts := strings.Fields(hexPart)
-		if len(parts) >= 5 {
-			if parts[4] == "00" { return "", nil }
-			return "0x" + strings.ToUpper(parts[4]), nil
+	const attempts = 5
+	for i := 0; i < attempts; i++ {
+		cmd := exec.Command("sudo", "-n", enginePath, "--open-path", path, "--length", "20", "--send-output", payload, "--read-input", "20")
+		out, _ := cmd.CombinedOutput()
+		outputStr := string(out)
+		if idx := strings.Index(outputStr, "read 20 bytes:"); idx != -1 {
+			hexPart := outputStr[idx+len("read 20 bytes:"):]
+			parts := strings.Fields(hexPart)
+			if len(parts) >= 5 {
+				if parts[4] == "00" {
+					return "", nil // definitive: no Easy-Switch feature
+				}
+				return "0x" + strings.ToUpper(parts[4]), nil
+			}
 		}
+		// Unparseable/empty read — the reply hasn't arrived. Back off and retry.
+		time.Sleep(time.Duration(60*(i+1)) * time.Millisecond)
 	}
 	return "", nil
 }

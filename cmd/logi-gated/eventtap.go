@@ -80,33 +80,46 @@ func (t *Tap) onMove(gx, gy float64) {
 		log.Printf("event tap: %d events seen, last=(%.0f,%.0f)", n, gx, gy)
 	}
 
-	enabled, dwellMs, cooldownMs, activeTrigger, channel := t.cfg.Get()
+	snap := t.cfg.Get()
 	disp := GetDisplayState()
+	if snap == nil {
+		return
+	}
 
-	if !enabled || !disp.Qualified {
+	// Auto-select the setup for the current display configuration.
+	setup, ok := snap.Setups[BucketFor(disp.ExternalCount)]
+	// Master toggle off, or this setup has no triggers → do nothing.
+	if !snap.Enabled || !ok || !setup.Armed() {
 		t.mu.Lock()
 		t.inZone = ""
 		t.mu.Unlock()
 		return
 	}
 
-	// Translate global CG coords → external display local coords.
-	lx := gx - disp.X
-	ly := gy - disp.Y
-	// Outside the external display → no zone.
-	if lx < 0 || ly < 0 || lx > disp.W || ly > disp.H {
+	// Find the external display the cursor is currently in. Corners are detected
+	// per-monitor so triggers work regardless of how many displays are attached.
+	rect, found := disp.ExternalUnderCursor(gx, gy)
+	if !found {
 		t.mu.Lock()
 		t.inZone = ""
 		t.mu.Unlock()
 		return
 	}
+	lx := gx - rect.X
+	ly := gy - rect.Y
 
-	rawZone := detectZone(lx, ly, disp.W, disp.H)
-	// Only the single active trigger fires.
+	rawZone := detectZone(lx, ly, rect.W, rect.H)
+	// A zone only counts if this setup binds it to a channel.
 	zone := ""
-	if rawZone == activeTrigger {
-		zone = rawZone
+	channel := 0
+	if rawZone != "" {
+		if ch, bound := setup.Zones[rawZone]; bound {
+			zone = rawZone
+			channel = ch
+		}
 	}
+	dwellMs := snap.DwellMs
+	cooldownMs := snap.CoolMs
 	now := time.Now()
 
 	t.mu.Lock()
@@ -116,7 +129,7 @@ func (t *Tap) onMove(gx, gy float64) {
 	}
 	// Zone transition.
 	if zone != "" {
-		log.Printf("zone enter: %s (local %.0f,%.0f in %.0fx%.0f)", zone, gx-disp.X, gy-disp.Y, disp.W, disp.H)
+		log.Printf("zone enter: %s -> channel %d (local %.0f,%.0f in %.0fx%.0f)", zone, channel, lx, ly, rect.W, rect.H)
 	}
 	t.inZone = zone
 	t.enterAt = now
