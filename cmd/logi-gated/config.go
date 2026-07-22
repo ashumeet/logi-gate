@@ -89,13 +89,13 @@ func DefaultConfig() *Config {
 		Enabled: true,
 		DwellMs: 200,
 		CoolMs:  1000,
+		// Every setup starts empty (no triggers → inert). The user configures
+		// each one independently in the menu; shipping identical defaults made
+		// distinct setups look like clones, so we ship none.
 		Setups: map[string]*Setup{
-			// Laptop alone: no triggers → inert by default (bare-laptop rule).
-			BucketNone: {},
-			// The two docked/monitor setups fire out of the box. Defaults reach
-			// the "other two" hosts; the user rebinds per machine in the menu.
-			BucketOne:   {Triggers: [2]Trigger{{Zone: "bottom_left", Channel: 2}, {Zone: "bottom_right", Channel: 3}}},
-			BucketMulti: {Triggers: [2]Trigger{{Zone: "bottom_left", Channel: 2}, {Zone: "bottom_right", Channel: 3}}},
+			BucketNone:  {},
+			BucketOne:   {},
+			BucketMulti: {},
 		},
 	}
 	return c
@@ -140,32 +140,20 @@ func (c *Config) normalize() bool {
 		c.Setups = map[string]*Setup{}
 	}
 
-	// Migrate a legacy single trigger→channel. It fired only with one external
-	// display, so it maps onto the "one" bucket's first trigger slot; the other
-	// buckets get safe defaults (none off, multi off — user opts in via menu).
-	migrated := false
-	if isValidTrigger(c.LegacyTrigger) && c.LegacyChannel >= 1 && c.LegacyChannel <= 3 {
-		if c.Setups[BucketOne] == nil {
-			c.Setups[BucketOne] = &Setup{}
+	// Ensure every bucket exists (all start empty/inert).
+	for _, b := range Buckets {
+		if c.Setups[b] == nil {
+			c.Setups[b] = &Setup{}
 		}
+	}
+
+	// Migrate a legacy single trigger→channel. It fired only with one external
+	// display, so it maps onto the "one" bucket's first trigger slot.
+	if isValidTrigger(c.LegacyTrigger) && c.LegacyChannel >= 1 && c.LegacyChannel <= 3 {
 		c.Setups[BucketOne].Triggers[0] = Trigger{Zone: c.LegacyTrigger, Channel: c.LegacyChannel}
-		migrated = true
 	}
 	c.LegacyTrigger = ""
 	c.LegacyChannel = 0
-
-	// Ensure every bucket exists. A brand-new "one" bucket (no legacy migration)
-	// gets the shipped defaults so the app is useful on first run.
-	def := DefaultConfig()
-	for _, b := range Buckets {
-		if c.Setups[b] == nil {
-			if !migrated {
-				c.Setups[b] = def.Setups[b]
-			} else {
-				c.Setups[b] = &Setup{}
-			}
-		}
-	}
 
 	// Repair each setup's triggers: drop invalid zones/channels and duplicates.
 	for _, b := range Buckets {
