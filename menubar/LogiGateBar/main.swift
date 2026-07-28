@@ -18,27 +18,37 @@ func countExternalDisplays() -> Int {
 let SOCKET_PATH: String = {
     return "/tmp/logigate-\(getuid()).sock"
 }()
-let TRIGGERS = ["bottom_left", "bottom_right", "left_edge", "right_edge"]
+let TRIGGERS = [
+    "top_left", "top_right", "bottom_left", "bottom_right",
+    "top_edge", "bottom_edge", "left_edge", "right_edge",
+]
 let TRIGGER_LABELS: [String: String] = [
+    "top_left": "Top-Left Corner",
+    "top_right": "Top-Right Corner",
     "bottom_left": "Bottom-Left Corner",
     "bottom_right": "Bottom-Right Corner",
+    "top_edge": "Top Edge",
+    "bottom_edge": "Bottom Edge",
     "left_edge": "Left Edge",
     "right_edge": "Right Edge",
 ]
 
-// One trigger slot: a zone bound to a channel (channel 0 / empty zone = unused).
+// One trigger slot: a zone + a channel, chosen independently in any order. `off`
+// is an explicit toggle that disables the trigger while keeping zone+channel.
 struct Trigger {
     var zone: String = ""
     var channel: Int = 0
-    var isSet: Bool { !zone.isEmpty && channel >= 1 && channel <= 3 }
+    var off: Bool = false
+    var complete: Bool { !zone.isEmpty && channel >= 1 && channel <= 3 }
+    var live: Bool { complete && !off }   // actually fires
 }
 
 // A Setup = one display configuration (bucket) with up to 2 triggers. It is
-// "armed" purely as a function of its triggers — if any slot is set it fires.
+// "armed" purely as a function of its triggers — if any slot is live it fires.
 // The master Enable button is the only global override.
 struct Setup {
     var triggers: [Trigger] = [Trigger(), Trigger()]
-    var armed: Bool { triggers.contains { $0.isSet } }
+    var armed: Bool { triggers.contains { $0.live } }
 }
 
 let BUCKET_LABELS: [String: String] = [
@@ -114,7 +124,8 @@ func fetchStatus() -> Status {
                 for (i, td) in trigs.prefix(2).enumerated() {
                     setup.triggers[i] = Trigger(
                         zone: (td["zone"] as? String) ?? "",
-                        channel: (td["channel"] as? Int) ?? 0)
+                        channel: (td["channel"] as? Int) ?? 0,
+                        off: (td["off"] as? Bool) ?? false)
                 }
             }
             s.setups[bucket] = setup
@@ -261,8 +272,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(switchParent)
     }
 
-    // Renders one setup: two trigger-slot submenus. The setup is armed
-    // automatically whenever at least one slot is set — no separate toggle.
+    // Renders one setup: two trigger-slot submenus. Zone and channel are chosen
+    // independently in any order; when both are set the trigger is live. "Off"
+    // is a toggle that disables it while KEEPING the zone/channel selection.
     func appendSetupBody(to menu: NSMenu, bucket: String, indent: Bool) {
         let pad = indent ? "  " : ""
         let setup = status.setups[bucket] ?? Setup()
@@ -271,13 +283,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let trig = setup.triggers[slot - 1]
             let sub = NSMenu()
 
-            // Zone picker (including Off).
-            let offItem = NSMenuItem(title: "Off", action: #selector(setTriggerZone(_:)), keyEquivalent: "")
+            // Off toggle — only meaningful once both zone+channel are chosen.
+            // Checked when the (complete) trigger is toggled off. Selecting it
+            // does not clear the zone/channel; it just flips the live state.
+            let offItem = NSMenuItem(title: "Off", action: #selector(toggleTriggerOff(_:)), keyEquivalent: "")
             offItem.target = self
-            offItem.representedObject = ["bucket": bucket, "slot": slot, "zone": "off"]
-            if !trig.isSet { offItem.state = .on }
+            offItem.representedObject = ["bucket": bucket, "slot": slot]
+            offItem.state = trig.off ? .on : .off
+            offItem.isEnabled = trig.complete   // nothing to toggle until both are set
             sub.addItem(offItem)
             sub.addItem(.separator())
+
+            // Zone picker — pick any; independent of the channel.
+            let zoneHeader = NSMenuItem(title: "Corner / edge:", action: nil, keyEquivalent: "")
+            zoneHeader.isEnabled = false
+            sub.addItem(zoneHeader)
             for z in TRIGGERS {
                 let zi = NSMenuItem(title: TRIGGER_LABELS[z] ?? z, action: #selector(setTriggerZone(_:)), keyEquivalent: "")
                 zi.target = self
@@ -286,7 +306,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 sub.addItem(zi)
             }
             sub.addItem(.separator())
-            // Channel picker.
+
+            // Channel picker — pick any; independent of the zone.
             let chHeader = NSMenuItem(title: "Switch to channel:", action: nil, keyEquivalent: "")
             chHeader.isEnabled = false
             sub.addItem(chHeader)
@@ -298,11 +319,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 sub.addItem(ci)
             }
 
+            // Parent label reflects current state: live, off, or partial.
+            let zoneName = trig.zone.isEmpty ? "—" : (TRIGGER_LABELS[trig.zone] ?? trig.zone)
+            let chName = trig.channel >= 1 ? "Ch \(trig.channel)" : "—"
             let desc: String
-            if trig.isSet {
-                desc = "\(TRIGGER_LABELS[trig.zone] ?? trig.zone) → Ch \(trig.channel)"
+            if trig.complete {
+                desc = trig.off ? "\(zoneName) → \(chName) (off)" : "\(zoneName) → \(chName)"
             } else {
-                desc = "Off"
+                desc = "\(zoneName) → \(chName)"   // partial — show what's chosen so far
             }
             let parent = NSMenuItem(title: "\(pad)Trigger \(slot):  \(desc)", action: nil, keyEquivalent: "")
             parent.submenu = sub
@@ -330,6 +354,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let slot = info["slot"] as? Int,
               let ch = info["channel"] as? Int else { return }
         _ = sendCommand("SET channel \(bucket) \(slot) \(ch)")
+        refresh()
+    }
+
+    // Toggle the trigger's Off flag without discarding its zone/channel.
+    @objc func toggleTriggerOff(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let bucket = info["bucket"] as? String,
+              let slot = info["slot"] as? Int else { return }
+        let currentlyOff = status.setups[bucket]?.triggers[slot - 1].off ?? false
+        _ = sendCommand("SET off \(bucket) \(slot) \(currentlyOff ? "off" : "on")")
         refresh()
     }
 

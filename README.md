@@ -151,7 +151,10 @@ Click the menubar icon for the menu (Layout A — the active setup expands inlin
 - **Enabled/Disabled** — master toggle (turns everything off regardless of triggers).
 - **Now: N external → …** — the currently-active setup and whether it's armed.
 - **THIS SETUP** — the active setup, expanded: *Trigger 1* and *Trigger 2*
-  submenus (pick a zone and a channel, or Off). Setting any trigger arms it.
+  submenus. Each trigger has a zone (four corners + four edges) and a target
+  channel, chosen **independently in any order**; the trigger goes live once
+  both are set. *Off* toggles a configured trigger on/off **without discarding**
+  its zone/channel, so you can disable and re-enable without re-picking.
 - **Other setups ▸** — the other two setups, each in its own submenu with the
   same controls, so you can pre-configure them.
 - **Switch now ▸** — manual one-click switch to a channel, ignores triggers.

@@ -16,7 +16,11 @@ var ConfigPath = func() string {
 	return filepath.Join(h, "Library", "Application Support", "LogiGate", "config.json")
 }()
 
-var ValidTriggers = []string{"bottom_left", "bottom_right", "left_edge", "right_edge"}
+// All corner + edge zones. Corners are checked before edges in detectZone.
+var ValidTriggers = []string{
+	"top_left", "top_right", "bottom_left", "bottom_right",
+	"top_edge", "bottom_edge", "left_edge", "right_edge",
+}
 
 // Buckets are the display configurations LogiGate auto-detects, keyed by how
 // many external displays are attached. Every real setup lands in exactly one.
@@ -40,15 +44,25 @@ func BucketFor(externalCount int) string {
 	}
 }
 
-// Trigger binds one corner/edge zone to a target channel. An empty Zone (or
-// out-of-range Channel) means the slot is unused.
+// Trigger binds one corner/edge zone to a target channel. Zone and Channel are
+// independent — either can be chosen first, in any order, and both persist.
+// Off is an explicit toggle: when true the trigger doesn't fire even though its
+// zone/channel remain set, so the user can flip it off and back on without
+// losing the selection.
 type Trigger struct {
 	Zone    string `json:"zone"`
 	Channel int    `json:"channel"`
+	Off     bool   `json:"off"`
 }
 
-func (t Trigger) valid() bool {
+// complete reports whether both zone and channel are chosen (regardless of Off).
+func (t Trigger) complete() bool {
 	return isValidTrigger(t.Zone) && t.Channel >= 1 && t.Channel <= 3
+}
+
+// valid (fires) requires a complete binding that is not toggled off.
+func (t Trigger) valid() bool {
+	return t.complete() && !t.Off
 }
 
 // Setup is one display configuration: up to two trigger slots. Slot 0 is
@@ -155,17 +169,26 @@ func (c *Config) normalize() bool {
 	c.LegacyTrigger = ""
 	c.LegacyChannel = 0
 
-	// Repair each setup's triggers: drop invalid zones/channels and duplicates.
+	// Repair each setup's triggers. Preserve partial (zone-only or channel-only)
+	// and toggled-off selections — the user builds a trigger incrementally and
+	// can flip it off without losing it. Only sanitize a genuinely-unknown zone
+	// (drop it, keeping the channel), and de-duplicate zones across the two
+	// slots by comparing only COMPLETE bindings.
 	for _, b := range Buckets {
 		s := c.Setups[b]
 		seen := map[string]bool{}
 		for i := range s.Triggers {
-			t := s.Triggers[i]
-			if !t.valid() || seen[t.Zone] {
-				s.Triggers[i] = Trigger{}
-				continue
+			t := &s.Triggers[i]
+			if t.Zone != "" && !isValidTrigger(t.Zone) {
+				t.Zone = "" // unknown zone name — clear it, keep the channel
 			}
-			seen[t.Zone] = true
+			if t.complete() {
+				if seen[t.Zone] {
+					t.Zone = "" // same zone already bound in the other slot
+				} else {
+					seen[t.Zone] = true
+				}
+			}
 		}
 	}
 
@@ -272,24 +295,27 @@ func (c *Config) SetEnabled(v bool) {
 }
 
 // SetTriggerZone sets the zone for a trigger slot (1 or 2) within a bucket.
+// Choosing a zone also un-toggles Off (an explicit selection means "use it").
 func (c *Config) SetTriggerZone(bucket string, slot int, zone string) bool {
 	if !isValidTrigger(zone) {
 		return false
 	}
-	return c.mutateTrigger(bucket, slot, func(t *Trigger) { t.Zone = zone })
+	return c.mutateTrigger(bucket, slot, func(t *Trigger) { t.Zone = zone; t.Off = false })
 }
 
 // SetTriggerChannel sets the channel for a trigger slot (1 or 2) within a bucket.
+// Choosing a channel also un-toggles Off.
 func (c *Config) SetTriggerChannel(bucket string, slot, channel int) bool {
 	if channel < 1 || channel > 3 {
 		return false
 	}
-	return c.mutateTrigger(bucket, slot, func(t *Trigger) { t.Channel = channel })
+	return c.mutateTrigger(bucket, slot, func(t *Trigger) { t.Channel = channel; t.Off = false })
 }
 
-// ClearTrigger empties a trigger slot (1 or 2) within a bucket.
-func (c *Config) ClearTrigger(bucket string, slot int) bool {
-	return c.mutateTrigger(bucket, slot, func(t *Trigger) { *t = Trigger{} })
+// SetTriggerOff toggles a trigger's Off flag WITHOUT discarding its zone/channel,
+// so the user can disable a fully-configured trigger and re-enable it later.
+func (c *Config) SetTriggerOff(bucket string, slot int, off bool) bool {
+	return c.mutateTrigger(bucket, slot, func(t *Trigger) { t.Off = off })
 }
 
 func (c *Config) mutateTrigger(bucket string, slot int, fn func(*Trigger)) bool {

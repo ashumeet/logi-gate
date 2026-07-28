@@ -185,11 +185,25 @@ func (t *Tap) onMove(gx, gy float64) {
 func detectZone(x, y, w, h float64) string {
 	const corner = 3.0
 	const edge = 1.0
+	// Corners first — a corner point also satisfies the edge conditions.
+	if x <= corner && y <= corner {
+		return "top_left"
+	}
+	if x >= w-corner && y <= corner {
+		return "top_right"
+	}
 	if x <= corner && y >= h-corner {
 		return "bottom_left"
 	}
 	if x >= w-corner && y >= h-corner {
 		return "bottom_right"
+	}
+	// Edges.
+	if y <= edge {
+		return "top_edge"
+	}
+	if y >= h-edge {
+		return "bottom_edge"
 	}
 	if x <= edge {
 		return "left_edge"

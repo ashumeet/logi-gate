@@ -76,7 +76,7 @@ func (s *Server) handle(c net.Conn) {
 			slots := s.cfg.SetupTriggers(b)
 			trigList := []map[string]any{}
 			for _, t := range slots {
-				trigList = append(trigList, map[string]any{"zone": t.Zone, "channel": t.Channel})
+				trigList = append(trigList, map[string]any{"zone": t.Zone, "channel": t.Channel, "off": t.Off})
 			}
 			setups[b] = map[string]any{"armed": sv.Armed(), "triggers": trigList}
 		}
@@ -120,17 +120,18 @@ func (s *Server) handle(c net.Conn) {
 		s.cfg.SetEnabled(!enabled)
 		fmt.Fprintf(c, "OK enabled=%v\n", !enabled)
 	case "SET":
-		// SET trigger <bucket> <slot 1|2> <zone|off>
-		// SET channel <bucket> <slot 1|2> <1|2|3>
-		// (A setup is armed iff it has a trigger — there is no separate armed toggle.)
+		// SET trigger <bucket> <slot 1|2> <zone>     — set the corner/edge zone
+		// SET channel <bucket> <slot 1|2> <1|2|3>     — set the target channel
+		// SET off     <bucket> <slot 1|2> <on|off>    — toggle without clearing
+		// (A setup is armed iff it has a live trigger — no separate armed toggle.)
 		if len(fields) < 4 {
-			fmt.Fprintln(c, "ERR usage: SET trigger <bucket> <1|2> <zone|off> | SET channel <bucket> <1|2> <1|2|3>")
+			fmt.Fprintln(c, "ERR usage: SET trigger <bucket> <1|2> <zone> | SET channel <bucket> <1|2> <1|2|3> | SET off <bucket> <1|2> <on|off>")
 			return
 		}
 		switch fields[1] {
 		case "trigger":
 			if len(fields) < 5 {
-				fmt.Fprintln(c, "ERR usage: SET trigger <bucket> <1|2> <zone|off>")
+				fmt.Fprintln(c, "ERR usage: SET trigger <bucket> <1|2> <zone>")
 				return
 			}
 			slot, err := strconv.Atoi(fields[3])
@@ -138,14 +139,24 @@ func (s *Server) handle(c net.Conn) {
 				fmt.Fprintln(c, "ERR invalid slot")
 				return
 			}
-			ok := false
-			if fields[4] == "off" {
-				ok = s.cfg.ClearTrigger(fields[2], slot)
-			} else {
-				ok = s.cfg.SetTriggerZone(fields[2], slot, fields[4])
-			}
-			if !ok {
+			if !s.cfg.SetTriggerZone(fields[2], slot, fields[4]) {
 				fmt.Fprintln(c, "ERR invalid trigger")
+				return
+			}
+			fmt.Fprintln(c, "OK")
+		case "off":
+			if len(fields) < 5 {
+				fmt.Fprintln(c, "ERR usage: SET off <bucket> <1|2> <on|off>")
+				return
+			}
+			slot, err := strconv.Atoi(fields[3])
+			if err != nil {
+				fmt.Fprintln(c, "ERR invalid slot")
+				return
+			}
+			off := fields[4] == "on" || fields[4] == "true" || fields[4] == "1"
+			if !s.cfg.SetTriggerOff(fields[2], slot, off) {
+				fmt.Fprintln(c, "ERR invalid slot")
 				return
 			}
 			fmt.Fprintln(c, "OK")
