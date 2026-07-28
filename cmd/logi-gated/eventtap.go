@@ -98,9 +98,10 @@ func (t *Tap) onMove(gx, gy float64) {
 		return
 	}
 
-	// Find the external display the cursor is currently in. Corners are detected
-	// per-monitor so triggers work regardless of how many displays are attached.
-	rect, found := disp.ExternalUnderCursor(gx, gy)
+	// Find the display the cursor is currently in (builtin or external). Corners
+	// are detected per-monitor so triggers work on any screen — including the
+	// laptop's own display when there are no externals (the "none" setup).
+	rect, found := disp.DisplayUnderCursor(gx, gy)
 	if !found {
 		t.mu.Lock()
 		t.inZone = ""

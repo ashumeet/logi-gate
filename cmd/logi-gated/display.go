@@ -47,15 +47,17 @@ type Rect struct {
 }
 
 type DisplayState struct {
-	ExternalCount int    // number of external (non-builtin) displays
-	Externals     []Rect // bounds of every external display
+	ExternalCount int    // number of external (non-builtin) displays — selects the setup bucket
+	Displays      []Rect // bounds of ALL active displays (builtin + external)
 }
 
-// ExternalUnderCursor returns the external display rectangle containing the
-// global point, and whether one was found. Corner/edge detection runs against
-// this rect so triggers work on any monitor, not just a single hardcoded one.
-func (s DisplayState) ExternalUnderCursor(gx, gy float64) (Rect, bool) {
-	for _, r := range s.Externals {
+// DisplayUnderCursor returns the display rectangle containing the global point,
+// and whether one was found. It considers ALL active displays (builtin AND
+// external) so corner/edge detection works on the laptop's own screen when
+// there are no externals (the "none"/0-external setup), and on whichever
+// monitor the cursor is on when there are.
+func (s DisplayState) DisplayUnderCursor(gx, gy float64) (Rect, bool) {
+	for _, r := range s.Displays {
 		if gx >= r.X && gy >= r.Y && gx <= r.X+r.W && gy <= r.Y+r.H {
 			return r, true
 		}
@@ -80,23 +82,23 @@ func recomputeDisplay() {
 	var count C.uint32_t
 	C.listDisplays(&ids[0], &count)
 
-	externals := []C.uint32_t{}
+	rects := make([]Rect, 0, int(count))
+	externalCount := 0
 	for i := 0; i < int(count); i++ {
 		if C.isBuiltin(ids[i]) == 0 {
-			externals = append(externals, ids[i])
+			externalCount++
 		}
-	}
-
-	rects := make([]Rect, 0, len(externals))
-	for _, id := range externals {
+		// Store bounds for EVERY active display (builtin + external) so corner
+		// detection works on the laptop screen too. The bucket is still chosen
+		// by externalCount; only the cursor hit-test spans all displays.
 		var x, y, w, h C.double
-		C.displayBounds(id, &x, &y, &w, &h)
+		C.displayBounds(ids[i], &x, &y, &w, &h)
 		rects = append(rects, Rect{X: float64(x), Y: float64(y), W: float64(w), H: float64(h)})
 	}
 
 	st := DisplayState{
-		ExternalCount: len(externals),
-		Externals:     rects,
+		ExternalCount: externalCount,
+		Displays:      rects,
 	}
 
 	displayMu.Lock()
