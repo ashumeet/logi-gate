@@ -88,8 +88,10 @@ func (t *Tap) onMove(gx, gy float64) {
 
 	// Auto-select the setup for the current display configuration.
 	setup, ok := snap.Setups[BucketFor(disp.ExternalCount)]
-	// Master toggle off, or this setup has no triggers → do nothing.
-	if !snap.Enabled || !ok || !setup.Armed() {
+	// Do nothing if: master toggle off, this setup has no triggers, or there are
+	// no switchable devices connected (nothing to switch → gate is pointless).
+	// DeviceCount()==0 gates only after a successful scan; <0 means "unknown".
+	if !snap.Enabled || !ok || !setup.Armed() || DeviceCount() == 0 {
 		t.mu.Lock()
 		t.inZone = ""
 		t.mu.Unlock()

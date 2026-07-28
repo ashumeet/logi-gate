@@ -51,12 +51,15 @@ let BUCKET_ORDER = ["none", "one", "multi"]
 struct Status {
     var enabled: Bool = false
     var externalCount: Int = 0
+    var deviceCount: Int = -1   // -1 = unknown (not yet scanned); 0 = none connected
     var activeBucket: String = "one"
     var setups: [String: Setup] = [:]
 
     var activeSetup: Setup? { setups[activeBucket] }
     var armedHere: Bool { activeSetup?.armed ?? false }
-    var active: Bool { enabled && armedHere }
+    // No switchable devices → nothing to switch → not usable.
+    var hasDevices: Bool { deviceCount != 0 }
+    var active: Bool { enabled && armedHere && hasDevices }
 }
 
 func sendCommand(_ cmd: String) -> String? {
@@ -101,6 +104,7 @@ func fetchStatus() -> Status {
     else { return s }
     s.enabled = (obj["enabled"] as? Bool) ?? false
     s.externalCount = (obj["external_count"] as? Int) ?? 0
+    s.deviceCount = (obj["device_count"] as? Int) ?? -1
     if let ab = obj["active_bucket"] as? String { s.activeBucket = ab }
     if let setups = obj["setups"] as? [String: Any] {
         for (bucket, raw) in setups {
@@ -157,7 +161,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func updateIcon() {
         guard let btn = statusItem.button else { return }
         let on = status.active
-        let disabled = !status.armedHere
+        // Greyed out when the active setup has no triggers OR no devices connected.
+        let disabled = !status.armedHere || !status.hasDevices
         let color: NSColor
         if disabled {
             color = NSColor.tertiaryLabelColor
@@ -178,7 +183,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         btn.alphaValue = disabled ? 0.45 : 1.0
         let tip: String
         let setupName = BUCKET_LABELS[status.activeBucket] ?? status.activeBucket
-        if !status.armedHere {
+        if !status.hasDevices {
+            tip = "LogiGate — off (no Logitech devices connected)"
+        } else if !status.armedHere {
             tip = "LogiGate — off (\(setupName) not armed)"
         } else if status.enabled {
             tip = "LogiGate — on (\(setupName))"
@@ -206,9 +213,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // "Now:" status line — which setup is active and whether it's armed.
         let activeName = BUCKET_LABELS[status.activeBucket] ?? status.activeBucket
-        let nowLine = NSMenuItem(
-            title: "Now: \(status.externalCount) external → \(activeName)\(status.armedHere ? " · armed" : " · off")",
-            action: nil, keyEquivalent: "")
+        let nowTitle: String
+        if !status.hasDevices {
+            nowTitle = "Now: no Logitech devices connected"
+        } else {
+            nowTitle = "Now: \(status.externalCount) external → \(activeName)\(status.armedHere ? " · armed" : " · off")"
+        }
+        let nowLine = NSMenuItem(title: nowTitle, action: nil, keyEquivalent: "")
         nowLine.isEnabled = false
         menu.addItem(nowLine)
         menu.addItem(.separator())

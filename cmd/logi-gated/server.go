@@ -83,11 +83,14 @@ func (s *Server) handle(c net.Conn) {
 
 		activeSetup, hasActive := snap.Setups[activeBucket]
 		armed := hasActive && activeSetup.Armed()
+		devCount := DeviceCount()
+		hasDevices := devCount != 0 // <0 (unknown) or >0 counts as "not gated off"
 		resp := map[string]any{
 			"enabled":        snap.Enabled,
 			"external_count": disp.ExternalCount,
+			"device_count":   devCount,
 			"active_bucket":  activeBucket,
-			"active":         snap.Enabled && armed,
+			"active":         snap.Enabled && armed && hasDevices,
 			"dwell_ms":       snap.DwellMs,
 			"cooldown_ms":    snap.CoolMs,
 			"setups":         setups,

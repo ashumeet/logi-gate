@@ -39,11 +39,13 @@ func NewManager() (*Manager, error) {
 		return m, fmt.Errorf("list failed: %w", err)
 	}
 
-	m.Devices = discoverDevices(string(out), m.enginePath)
+	cache := loadIndexCache()
+	m.Devices = discoverDevices(string(out), m.enginePath, cache)
+	cache.save()
 	return m, nil
 }
 
-func discoverDevices(output string, enginePath string) []ManagedDevice {
+func discoverDevices(output string, enginePath string, cache *indexCache) []ManagedDevice {
 	var devices []ManagedDevice
 	lines := strings.Split(output, "\n")
 	var currentPID, currentName, currentPath string
@@ -62,14 +64,16 @@ func discoverDevices(output string, enginePath string) []ManagedDevice {
 		}
 
 		if currentPID != "" && strings.Contains(line, "usagePage:     0xFF43") {
-			// Fast path: use hardcoded indices based on device PID
-			idx := ""
-			if currentPID == "B034" { idx = "0x0A" } // MX Master 3S
-			if currentPID == "B364" { idx = "0x09" } // ERGO K860 (older unit)
-			if currentPID == "B359" { idx = "0x1A" } // ERGO K860 (B359 unit)
-			
-			if idx == "" {
+			// Resolve the ChangeHost feature index. It's a stable per-model
+			// property, so we cache it by PID: a cache hit skips the ~470ms
+			// probe entirely (the whole reason switching was slow). Only a
+			// never-seen model pays the probe cost, once.
+			idx, ok := cache.get(currentPID)
+			if !ok {
 				idx, _ = probeFeatureIndex(currentPath, enginePath)
+				if idx != "" && idx != "0x00" {
+					cache.put(currentPID, idx)
+				}
 			}
 
 			if idx != "" && idx != "0x00" {
@@ -80,38 +84,76 @@ func discoverDevices(output string, enginePath string) []ManagedDevice {
 					SwitchIdx: idx,
 				})
 			}
-			currentPID = "" 
+			currentPID = ""
 		}
 	}
 	return devices
 }
 
-// probeFeatureIndex asks the device for its Easy-Switch feature index via the
-// HID++ root-feature query. The device's HID input pipe is racy — a single read
-// frequently returns before the reply lands (empty read), so we retry with
-// backoff. A parsed byte (including a genuine 0x00 "feature absent") is a
-// definitive answer and stops the loop; only unparseable/empty reads retry.
+// probeFeatureIndex resolves the device's ChangeHost (Easy-Switch) feature
+// index via the HID++ 2.0 root-feature query: getFeature(featureId=0x1814).
+// 0x1814 is the ChangeHost feature — the one SwitchAll targets to move hosts.
+//
+// Request:  11 FF 00 00 18 14 ...   (root feature 0x00, func getFeature, arg 0x1814)
+// Response: 11 FF 00 00 <IDX> ...   (byte 4 = index of feature 0x1814 on this device)
+//
+// NB: it MUST query 0x1814, not 0x1E00. Probing 0x1E00 returns the index of a
+// different feature (0x1B on the MX Master, 0x1A on the K860) — those are not
+// ChangeHost, so a switch sent to them silently no-ops. The correct 0x1814
+// query returns 0x0A on the MX Master (matches the hardware-validated value)
+// and 0x08 on the K860.
+//
+// The device's HID input pipe is racy: right after opening the path the first
+// report(s) read back are often STALE/unrelated frames, not the reply to our
+// query. Trusting the first report is what dropped devices — if a stray frame's
+// byte 4 happened to be 0x00 we'd wrongly conclude "no ChangeHost feature".
+// So we VALIDATE that the reply echoes our request header (11 FF 00 00) before
+// accepting byte 4, and keep reading/retrying until a matching reply arrives.
 func probeFeatureIndex(path string, enginePath string) (string, error) {
-	payload := "0x11,0xFF,0x00,0x00,0x1E,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00"
-	const attempts = 5
+	payload := "0x11,0xFF,0x00,0x00,0x18,0x14,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00"
+	const attempts = 8
 	for i := 0; i < attempts; i++ {
 		cmd := exec.Command("sudo", "-n", enginePath, "--open-path", path, "--length", "20", "--send-output", payload, "--read-input", "20")
 		out, _ := cmd.CombinedOutput()
-		outputStr := string(out)
-		if idx := strings.Index(outputStr, "read 20 bytes:"); idx != -1 {
-			hexPart := outputStr[idx+len("read 20 bytes:"):]
-			parts := strings.Fields(hexPart)
-			if len(parts) >= 5 {
-				if parts[4] == "00" {
-					return "", nil // definitive: no Easy-Switch feature
-				}
-				return "0x" + strings.ToUpper(parts[4]), nil
+		if idx, ok := parseProbeReply(string(out)); ok {
+			if idx == "0x00" {
+				return "", nil // validated reply: device has no Easy-Switch feature
 			}
+			return idx, nil
 		}
-		// Unparseable/empty read — the reply hasn't arrived. Back off and retry.
+		// No valid reply yet (empty read or a stale/unmatched frame). Back off and retry.
 		time.Sleep(time.Duration(60*(i+1)) * time.Millisecond)
 	}
 	return "", nil
+}
+
+// parseProbeReply extracts the feature index from a probe response, but only if
+// the frame echoes our request header (11 FF 00 00). Returns (idx, true) on a
+// matching reply — including "0x00" meaning the feature is genuinely absent —
+// or ("", false) when no matching reply is present and the caller should retry.
+func parseProbeReply(output string) (string, bool) {
+	marker := "read 20 bytes:"
+	rest := output
+	for {
+		i := strings.Index(rest, marker)
+		if i == -1 {
+			return "", false
+		}
+		hexPart := rest[i+len(marker):]
+		rest = hexPart
+		parts := strings.Fields(hexPart)
+		if len(parts) < 5 {
+			continue
+		}
+		// Validate the HID++ reply header echoes our request: 11 FF 00 00.
+		if !strings.EqualFold(parts[0], "11") ||
+			!strings.EqualFold(parts[1], "FF") ||
+			!strings.EqualFold(parts[2], "00") ||
+			!strings.EqualFold(parts[3], "00") {
+			continue // stale/unrelated frame — keep looking
+		}
+		return "0x" + strings.ToUpper(parts[4]), true
+	}
 }
 
 func (m *Manager) SwitchAll(channel uint8) error {

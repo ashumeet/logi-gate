@@ -34,9 +34,15 @@ no Logitech Flow, no shared network required.
   `CGGetActiveDisplayList` and `CGDisplayRegisterReconfigurationCallback` work
   against WindowServer. A root system daemon under `/Library/LaunchDaemons/`
   cannot see displays and its event tap breaks across reboots.
-- **Display gating:** triggers only fire when exactly **one external display**
-  is connected. With zero externals (laptop only) or multiple externals the
-  menubar icon greys out and the daemon drops cursor events.
+- **Setup gating:** the active setup is chosen by external-display count
+  (0/1/2+ buckets); a setup fires only if it has a trigger. See Usage below.
+- **Device gating:** if no switchable Logitech devices are connected there's
+  nothing to switch, so the icon greys out and the daemon drops cursor events.
+  Presence is driven by IOKit HID add/remove callbacks (push, **no polling**).
+- **Feature-index cache:** the per-device ChangeHost index (needed to switch)
+  is resolved once via HID probe and cached by PID in `index-cache.json`. A warm
+  switch skips the ~470ms-per-device probe, dropping switch latency from ~2s to
+  ~100ms. The probe only runs on a cache miss (a device model never seen).
 - **Socket IPC:** daemon exposes a UNIX socket at `/tmp/logigate-$UID.sock`
   (commands: `STATUS`, `TOGGLE`,
   `SET trigger <bucket> <1|2> <zone|off>`, `SET channel <bucket> <1|2> <1|2|3>`,
@@ -222,9 +228,10 @@ indices.
 
 ## Contributing
 
-Hardware protocol mappings and feature indices are documented in
-`HARDWARE_PROTOCOL.md`. Unknown Logitech devices are resolved dynamically by
-`probeFeatureIndex` in `cmd/logi-gate/manager.go`, which retries the HID++
-feature query with backoff (the device pipe is racy, so a single read often
-misses). Hardcoded fast-path IDs (B034, B364, B359) in the same file skip the
-probe for known units — an optimization, not a requirement.
+Hardware protocol mappings are documented in `HARDWARE_PROTOCOL.md`. Every
+Logitech device's ChangeHost feature index is resolved dynamically by
+`probeFeatureIndex` in `cmd/logi-gate/manager.go` — there is no hardcoded
+PID→index table. The probe queries HID++ feature `0x1814`, validates the reply
+header (`11 FF 00 00`) to skip the stale frames the device emits right after
+open, and retries with backoff. This works for any Logitech unit, so multiple
+keyboard/mouse sets across machines are handled without code changes.
